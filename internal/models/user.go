@@ -74,3 +74,22 @@ func (r *UserRepo) GetUserByEmail(email string) (*User, error) {
 
 	return &u, nil
 }
+
+func (r *UserRepo) GetUserByID(userID int64) (*User, error) {
+	query := `
+		SELECT id, name, email, created_at, password_hash
+		FROM users WHERE id = $1
+	`
+
+	var u User
+	err := r.db.QueryRow(query, userID).Scan(&u.ID, &u.Name, &u.Email, &u.CreatedAt, &u.PasswordHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return  nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("UserRepo.GetUserByID: %w", err)
+	}
+
+	return &u, nil
+}

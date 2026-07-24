@@ -4,6 +4,7 @@ import (
 	"log"
 	"orders/internal/database"
 	"orders/internal/handlers"
+	"orders/internal/middleware"
 	"orders/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -33,8 +34,15 @@ func main() {
 		api.GET("/health", func(c *gin.Context) {
             c.JSON(200, gin.H{"status": "ok"})
         })
-
 		api.POST("/users/register", userHandler.Register)
+		api.POST("/users/login", userHandler.Login)
+
+		//私有
+		auth := api.Group("")
+		auth.Use(middleware.AuthMiddleware())
+		{
+			auth.GET("/users/me", userHandler.Me)
+		}
 	}
 
 	r.NoRoute(func(c *gin.Context) {
