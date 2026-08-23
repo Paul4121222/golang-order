@@ -1,7 +1,10 @@
+package models
+
 import (
-	"time"
 	"database/sql"
 	"errors"
+	"fmt"
+	"time"
 )
 
 var ErrProductNotFound = errors.New("Product Not Found.")
@@ -35,8 +38,8 @@ func NewOrderDb(db *sql.DB) *OrderRepo{
 
 //使用者的訂單內容
 type OrderInput struct {
-	Product_id string `binding: "required"`
-	Quantity int `binding: "required,gte=1,lte=100"`
+	ProductID int64 `json:"product_id" binding:"required"`
+	Quantity  int   `json:"quantity" binding:"required,gte=1,lte=100"`
 }
 
 func (o *OrderRepo) CreateOrder(userID int64, items []OrderInput) (*Order, error){
@@ -44,7 +47,7 @@ func (o *OrderRepo) CreateOrder(userID int64, items []OrderInput) (*Order, error
 	var totalCents int64 
 
 	//建立Transaction，只有全部DB操作成功才套用，其中一步失敗就整個操作不算。
-	tx, err := tx.Begin()
+	tx, err := o.db.Begin()
 	if err != nil {
         return nil, fmt.Errorf("OrderRepo.CreateOrder: begin: %w", err)
     }
@@ -59,18 +62,18 @@ func (o *OrderRepo) CreateOrder(userID int64, items []OrderInput) (*Order, error
 
 		err := tx.QueryRow(`
 			SELECT name, price_cents, stock FROM products WHERE id = $1
-		`, input.Product_id).Scan(&productName, &priceCents, &stock)
+		`, input.ProductID).Scan(&productName, &priceCents, &stock)
 
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("%w: productID = %d", ErrProductNotFound, input.Product_id)
+			return nil, fmt.Errorf("%w: productID = %d", ErrProductNotFound, input.ProductID)
 		}
 
 		if err != nil {
 			return nil, fmt.Errorf("OrderRepo.CreateOrder: query product %w", err)
 		}
 
-		if input.Quantity > stock {
-			return nil, fmt.Errorf("%w: productID = %d", ErrInsufficientStock, input.Product_id)
+		if int64(input.Quantity) > stock {
+			return nil, fmt.Errorf("%w: productID = %d", ErrInsufficientStock, input.ProductID)
 		}
 
 		totalCents += priceCents * int64(input.Quantity)
@@ -89,7 +92,7 @@ func (o *OrderRepo) CreateOrder(userID int64, items []OrderInput) (*Order, error
 	order.TotalCents = totalCents
 	order.Status = "pending"
 
-	err := tx.QueryRow(`
+	err = tx.QueryRow(`
 		INSERT INTO orders(user_id, total_cents, status) VALUES($1,$2,$3)
 		RETURNING  id, created_at
 	`, userID, totalCents, "pending").Scan(&order.ID, &order.CreatedAt)
@@ -106,6 +109,7 @@ func (o *OrderRepo) CreateOrder(userID int64, items []OrderInput) (*Order, error
 		err := tx.QueryRow(`
 			INSERT INTO order_items(order_id, product_id, quantity, unit_price_cents) 
 			VALUES($1,$2,$3,$4)
+			RETURNING id
 		`, orderItems[i].OrderID, orderItems[i].ProductID, orderItems[i].Quantity, orderItems[i].UnitPriceCents).Scan(&id)
 
 		if err != nil {
@@ -114,10 +118,8 @@ func (o *OrderRepo) CreateOrder(userID int64, items []OrderInput) (*Order, error
 		orderItems[i].ID = id
 
 		if _, err := tx.Exec(`
-			UPDATE products SET stock = stock - $1 WHERE = id = $2
-		`, orderItems[i].Quantity, orderItems[i].ProductID)
-
-		if err != nil {
+			UPDATE products SET stock = stock - $1 WHERE id = $2
+		`, orderItems[i].Quantity, orderItems[i].ProductID); err != nil {
             return nil, fmt.Errorf("OrderRepo.CreateOrder: update stock: %w", err)
         }
 	}
@@ -134,7 +136,7 @@ func (o *OrderRepo) CreateOrder(userID int64, items []OrderInput) (*Order, error
 func (o *OrderRepo) GetOrderByID(orderID, userID int64) (*Order, error) {
 	var order Order
 	err := o.db.QueryRow(`
-		SELECT id, user_id, total_cents, status created_at 
+		SELECT id, user_id, total_cents, status, created_at
 		FROM orders WHERE id = $1 AND user_id = $2
 	`, orderID, userID).Scan(&order.ID, &order.UserID, &order.TotalCents, &order.Status, &order.CreatedAt)
 
@@ -145,4 +147,89 @@ func (o *OrderRepo) GetOrderByID(orderID, userID int64) (*Order, error) {
     if err != nil {
         return nil, fmt.Errorf("OrderRepo.GetOrderByID: %w", err)
     }
+
+	return &order, nil
+}
+
+// internal/models/order.go
+func (r *OrderRepo) ListOrdersWithItemsByUserID(userID int64) ([]Order, error) {
+    query := `
+        SELECT
+            o.id, o.user_id, o.total_cents, o.status, o.created_at,
+            oi.id, oi.product_id, oi.quantity, oi.unit_price_cents, p.name
+        FROM orders o
+        LEFT JOIN order_items oi ON oi.order_id = o.id
+        LEFT JOIN products p ON p.id = oi.product_id
+        WHERE o.user_id = $1
+        ORDER BY o.id DESC, oi.id
+    `
+    rows, err := r.db.Query(query, userID)
+    if err != nil {
+        return nil, fmt.Errorf("ListOrdersWithItems: %w", err)
+    }
+    defer rows.Close()
+
+    // 用 map 分組（key = orderID，value = *Order）
+    orderMap := make(map[int64]*Order)
+    var orderList []*Order  // 保持順序
+
+    for rows.Next() {
+        var oID int64
+        var userID int64
+        var totalCents int64
+        var status string
+        var createdAt time.Time
+
+        // items 欄位可能是 NULL（LEFT JOIN 訂單沒 items 時）
+        var itemID sql.NullInt64
+        var productID sql.NullInt64
+        var quantity sql.NullInt32
+        var unitPrice sql.NullInt64
+        var productName sql.NullString
+
+        err := rows.Scan(
+            &oID, &userID, &totalCents, &status, &createdAt,
+            &itemID, &productID, &quantity, &unitPrice, &productName,
+        )
+        if err != nil {
+            return nil, fmt.Errorf("ListOrdersWithItems: scan: %w", err)
+        }
+
+        // 檢查 map 有沒有這筆 order
+        order, exists := orderMap[oID]
+        if !exists {
+            order = &Order{
+                ID:         oID,
+                UserID:     userID,
+                TotalCents: totalCents,
+                Status:     status,
+                CreatedAt:  createdAt,
+                Items:      []OrderItem{},
+            }
+            orderMap[oID] = order
+            orderList = append(orderList, order)
+        }
+
+        // 如果有 item，加進 order
+        if itemID.Valid {
+            order.Items = append(order.Items, OrderItem{
+                ID:             itemID.Int64,
+                OrderID:        oID,
+                ProductID:      productID.Int64,
+                ProductName:    productName.String,
+                Quantity:       int(quantity.Int32),
+                UnitPriceCents: unitPrice.Int64,
+            })
+        }
+    }
+    if err := rows.Err(); err != nil {
+        return nil, fmt.Errorf("ListOrdersWithItems: %w", err)
+    }
+
+    // *Order → Order
+    result := make([]Order, 0, len(orderList))
+    for _, o := range orderList {
+        result = append(result, *o)
+    }
+    return result, nil
 }

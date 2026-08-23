@@ -27,6 +27,9 @@ func main() {
 
 	userHandler := handlers.NewUserHandler(userRepo)
 
+	orderRepo := models.NewOrderDb(db)
+	orderHandler := handlers.NewOrderHandler(orderRepo)
+
 	r := gin.Default()
 
 	api := r.Group("/api/v1")
@@ -42,6 +45,8 @@ func main() {
 		auth.Use(middleware.AuthMiddleware())
 		{
 			auth.GET("/users/me", userHandler.Me)
+
+			auth.GET("/orders/full", orderHandler.GetFullOrders)
 		}
 	}
 
