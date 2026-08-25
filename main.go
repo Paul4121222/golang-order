@@ -24,10 +24,9 @@ func main() {
 	defer db.Close()
 	
 	userRepo := models.NewUserRepo(db)
+	orderRepo := models.NewOrderDb(db)
 
 	userHandler := handlers.NewUserHandler(userRepo)
-
-	orderRepo := models.NewOrderDb(db)
 	orderHandler := handlers.NewOrderHandler(orderRepo)
 
 	r := gin.Default()
@@ -46,7 +45,10 @@ func main() {
 		{
 			auth.GET("/users/me", userHandler.Me)
 
+			auth.POST("/orders", orderHandler.Create)
+			auth.GET("/orders", orderHandler.List)
 			auth.GET("/orders/full", orderHandler.GetFullOrders)
+			auth.GET("/orders/:id", orderHandler.Get)
 		}
 	}
 

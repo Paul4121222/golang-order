@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-var ErrProductNotFound = errors.New("Product Not Found.")
-var ErrInsufficientStock = errors.New("insufficient Stock.")
+var ErrProductNotFound = errors.New("product Not Found")
+var ErrInsufficientStock = errors.New("insufficient Stock")
 
 type Order struct {
 	ID int64 `json:"id"`
@@ -43,6 +43,7 @@ type OrderInput struct {
 }
 
 func (o *OrderRepo) CreateOrder(userID int64, items []OrderInput) (*Order, error){
+
 	orderItems := make([]OrderItem, 0, len(items))
 	var totalCents int64 
 
@@ -148,10 +149,66 @@ func (o *OrderRepo) GetOrderByID(orderID, userID int64) (*Order, error) {
         return nil, fmt.Errorf("OrderRepo.GetOrderByID: %w", err)
     }
 
+	rows, err := o.db.Query(`
+		SELECT oi.id, oi.order_id, oi.product_id, pd.name, oi.quantity, oi.unit_price_cents
+		FROM order_items oi JOIN products pd ON oi.product_id = pd.id
+		WHERE oi.order_id = $1 ORDER BY oi.id
+	`, orderID)
+
+	if err != nil {
+		return nil, fmt.Errorf("OrderRepo.GetOrderByID: query product items %w", err)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var oi OrderItem
+		err := rows.Scan(&oi.ID, &oi.OrderID, &oi.ProductID, &oi.ProductName, &oi.Quantity, &oi.UnitPriceCents)
+		if err != nil {
+			return nil, fmt.Errorf("OrderRepo.GetOrderByID: scan product %w", err)
+		}
+		order.Items = append(order.Items, oi)
+	}
+
+	//可能連線斷了造成錯誤
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("OrderRepo.GetOrderByID: %w", err)
+	}
+
 	return &order, nil
 }
 
-// internal/models/order.go
+func (o *OrderRepo) ListOrderByUserID(userID int64) ([]Order, error) {
+	rows, err := o.db.Query(`
+		SELECT id, user_id, total_cents, status, created_at
+		FROM orders WHERE user_id = $1 ORDER BY id DESC
+	`, userID)
+
+	if err != nil {
+		return nil, fmt.Errorf("OrderRepo.ListOrderByUserID: %w", err)
+	}
+
+	orders := []Order{}
+	defer rows.Close()
+	for rows.Next() {
+		var o Order
+		err := rows.Scan(&o.ID, &o.UserID, &o.TotalCents, &o.Status, &o.CreatedAt)
+
+		if err != nil {
+			return nil, fmt.Errorf("OrderRepo.ListOrderByUserID: Scan %w", err)
+		}
+		orders = append(orders, o)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("OrderRepo.ListOrderByUserID:  %w", err)
+	}
+
+	return orders, nil
+}
+
+//假設現在要列出使用者的訂單，同時列出每個訂單的商品詳細資訊，需要打資料庫連線 N + 1 次，會需要等非常久
+//解決: 用Join撈出
 func (r *OrderRepo) ListOrdersWithItemsByUserID(userID int64) ([]Order, error) {
     query := `
         SELECT
@@ -170,6 +227,7 @@ func (r *OrderRepo) ListOrdersWithItemsByUserID(userID int64) ([]Order, error) {
     defer rows.Close()
 
     // 用 map 分組（key = orderID，value = *Order）
+    // 因為要改變 Order 的 Items 屬性，所以需要用 Pointer
     orderMap := make(map[int64]*Order)
     var orderList []*Order  // 保持順序
 
