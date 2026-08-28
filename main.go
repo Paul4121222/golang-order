@@ -52,6 +52,20 @@ func main() {
 		}
 	}
 
+	r.GET("/debug/pool", func(c *gin.Context) {
+		c.JSON(200, db.Stats())
+	})
+
+	r.GET("/debug/slow", func(c *gin.Context){
+		var s string
+		if err := db.QueryRow("SELECT pg_sleep(1)").Scan(&s); err != nil {
+			c.JSON(500,gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(200, gin.H{"ok":true})
+	})
+
 	r.NoRoute(func(c *gin.Context) {
         c.JSON(404, gin.H{"error": "路徑不存在"})
     })

@@ -18,7 +18,7 @@ func New(connStr string) (*sql.DB, error) {
 
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Second)
+	db.SetConnMaxLifetime(50 * time.Second)
 
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("Ping失敗: %w", err)
