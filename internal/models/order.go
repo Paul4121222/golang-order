@@ -62,7 +62,7 @@ func (o *OrderRepo) CreateOrder(userID int64, items []OrderInput) (*Order, error
 		var stock int64
 
 		err := tx.QueryRow(`
-			SELECT name, price_cents, stock FROM products WHERE id = $1
+			SELECT name, price_cents, stock FROM products WHERE id = $1 FOR UPDATE
 		`, input.ProductID).Scan(&productName, &priceCents, &stock)
 
 		if errors.Is(err, sql.ErrNoRows) {
